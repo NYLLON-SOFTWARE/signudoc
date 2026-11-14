@@ -146,6 +146,32 @@ export const declineEnvelopeSchema = z.object({
   reason: optionalTrimmedString(1000),
 });
 
+export const missingCorrectedSignerFieldsMessage =
+  "Provide a name, an email address, or both.";
+
+/** Name and/or email for a signer who has not signed or declined. */
+export const correctSentSignerSchema = z
+  .object({
+    email: emailSchema.optional(),
+    name: nameSchema.optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.email === undefined && value.name === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: missingCorrectedSignerFieldsMessage,
+      });
+    }
+  });
+
+export const correctSentSignerResponseSchema = z.object({
+  email: emailSchema,
+  envelopeId: idSchema,
+  invitationSent: z.boolean(),
+  name: nameSchema,
+  signerId: idSchema,
+});
+
 export type CopyRecipient = z.infer<typeof copyRecipientSchema>;
 /** A copy recipient as stored: it always has an id. */
 export type CopyRecipientRecord = { email: string; id: string; name: string };
@@ -156,3 +182,7 @@ export type ReplaceSignersResponse = z.infer<
 >;
 export type SignerRecord = z.infer<typeof signerRecordSchema>;
 export type DeclineEnvelopeInput = z.infer<typeof declineEnvelopeSchema>;
+export type CorrectSentSignerInput = z.infer<typeof correctSentSignerSchema>;
+export type CorrectSentSignerResponse = z.infer<
+  typeof correctSentSignerResponseSchema
+>;

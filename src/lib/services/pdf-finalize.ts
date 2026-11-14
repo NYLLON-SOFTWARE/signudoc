@@ -10,6 +10,7 @@ import {
 import type { FieldRecord } from "../schemas/field.ts";
 import type { SignerRecord } from "../schemas/signer.ts";
 import { buildSignatureManifestation } from "../signature-meanings.ts";
+import { describeSignerCorrectedEvent } from "./audit.ts";
 import { canonicalJson } from "../utils/canonical-json.ts";
 import { normalizedRectToPdfRect } from "../utils/pdf-coords.ts";
 import { embedTextFaces, type TextFace } from "./pdf-fonts.ts";
@@ -131,6 +132,8 @@ function redactAuditEventMetadataForRecipients(
   delete nextMetadata.signerEmail;
   // Who an email went to is another party's address.
   delete nextMetadata.recipient;
+  // A correction's previous address is the same kind of third-party email.
+  delete nextMetadata.previousEmail;
 
   return Object.keys(nextMetadata).length > 0 ? nextMetadata : null;
 }
@@ -775,8 +778,11 @@ function buildAuditLines(input: {
     const actorLabel =
       signerName && actor !== signerName ? `${signerName} <${actor}>` : actor;
 
+    const eventLabel =
+      event.event === "signer_corrected" ? "Signer corrected" : event.event;
+
     pushParagraph(
-      `${formatAuditTimestamp(event.createdAt)} | ${event.event} | ${actorLabel}`,
+      `${formatAuditTimestamp(event.createdAt)} | ${eventLabel} | ${actorLabel}`,
       input.fonts.regular,
       bodyFontSize,
     );
@@ -875,6 +881,41 @@ function describeProviderSignatureEvidence(
   return details;
 }
 
+function isRevertedSignerCorrection(event: AuditEventRecord): boolean {
+  return (
+    event.event === "signer_corrected" && event.metadata?.reverted === true
+  );
+}
+
+/**
+ * Index at which this signer's current identity begins. A correction that
+ * was later reversed restores the previous identity, so earlier consent
+ * still counts.
+ */
+function currentSignerIdentityStart(
+  events: readonly AuditEventRecord[],
+): number {
+  const starts = [0];
+
+  for (let index = 0; index < events.length; index += 1) {
+    const event = events[index];
+
+    if (event?.event !== "signer_corrected") {
+      continue;
+    }
+
+    if (isRevertedSignerCorrection(event)) {
+      if (starts.length > 1) {
+        starts.pop();
+      }
+    } else {
+      starts.push(index + 1);
+    }
+  }
+
+  return starts[starts.length - 1] ?? 0;
+}
+
 /** What the record shows about how one signer was identified and agreed. */
 function describeSignerEvidence(
   signer: SignerRecord,
@@ -886,7 +927,23 @@ function describeSignerEvidence(
   );
   const details: string[] = [];
   const signed = forSigner.find((event) => event.event === "signed");
-  const consented = forSigner.find((event) => event.event === "consented");
+  // A correction clears the row's consent. The first consented event for
+  // this signer id can still be the previous person's, so only agreement
+  // recorded after the latest standing correction counts as this
+  // recipient's. A reversal restores the earlier identity, including that
+  // earlier agreement.
+  const identityStart = currentSignerIdentityStart(forSigner);
+  let consented: AuditEventRecord | undefined;
+
+  for (let index = forSigner.length - 1; index >= identityStart; index -= 1) {
+    const event = forSigner[index];
+
+    if (event?.event === "consented") {
+      consented = event;
+      break;
+    }
+  }
+
   const checks = [
     "possession of the emailed signing link",
     ...readStringArray(signed?.metadata?.authMethods).map(
@@ -987,6 +1044,10 @@ function describeEventEvidence(event: AuditEventRecord): string[] {
         .filter(Boolean)
         .join(" "),
     );
+  }
+
+  if (event.event === "signer_corrected") {
+    details.push(describeSignerCorrectedEvent(metadata));
   }
 
   if (event.event === "verified" && typeof metadata.method === "string") {

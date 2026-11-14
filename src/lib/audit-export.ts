@@ -4,7 +4,10 @@ import {
   queryMany,
   queryOne,
 } from "./db/connection.ts";
-import { verifyAuditChain } from "./services/audit.ts";
+import {
+  describeSignerCorrectedEvent,
+  verifyAuditChain,
+} from "./services/audit.ts";
 import {
   listSystemAuditEventsBetween,
   verifySystemAuditChain,
@@ -138,12 +141,14 @@ export async function exportEnvelopeAuditCsv(
     ...rows.map((row) => [
       row.sequence,
       isoTime(row.createdAt),
-      row.event,
+      row.event === "signer_corrected" ? "Signer corrected" : row.event,
       row.actorType,
       row.actorEmail,
       row.ipAddress,
       row.userAgent,
-      row.metadata,
+      row.event === "signer_corrected"
+        ? describeSignerCorrectedEvent(row.metadata)
+        : row.metadata,
       row.id,
       row.prevHash,
       row.rowHash,
